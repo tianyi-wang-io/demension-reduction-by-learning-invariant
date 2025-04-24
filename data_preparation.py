@@ -98,11 +98,7 @@ class TripletCIFAR10(torch.utils.data.Dataset):
         # Better: sample from indices excluding current, if possible.
         if len(same_class_indices) > 1:
             positive_index = random.choice([i for i in same_class_indices if i != index])
-        # else: positive_index remains the same as anchor, triplet might not be effective,
-        # but this case is rare with typical batch sizes. Or handle more robustly.
-        # For simplicity here, we'll just allow anchor==positive if class size is 1.
-        # A more robust approach samples from a list of indices excluding 'index'.
-        # Let's do the robust sampling:
+
         available_positive_indices = [i for i in same_class_indices if i != index]
         if not available_positive_indices:
              # Handle case where only one sample exists for this class (rare in CIFAR subset)
@@ -127,10 +123,6 @@ class TripletCIFAR10(torch.utils.data.Dataset):
         return (anchor_img, positive_img, negative_img), anchor_label
 
 
-# Modify the data loader function
-# It will return TripletCIFAR10 for training and standard CIFAR10 for testing
-# The transforms (including augmentation for training) are handled by the base dataset
-# used within TripletCIFAR10.
 def get_cifar10_datasets(data_dir='./data'):
     """
     Prepares, filters, remaps, and returns data loaders for
@@ -185,12 +177,11 @@ def get_cifar10_datasets(data_dir='./data'):
 
 
 def get_dataloader(triplet_train_dataset, base_test_dataset, batch_size=128, num_workers=4):
-    # Create data loaders
-    # train_loader uses the Triplet Dataset
+
     train_loader = torch.utils.data.DataLoader(
         triplet_train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True
     )
-    # test_loader uses the standard filtered base test dataset
+
     test_loader = torch.utils.data.DataLoader(
         base_test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True
     )
@@ -198,24 +189,3 @@ def get_dataloader(triplet_train_dataset, base_test_dataset, batch_size=128, num
     print(f"Filtered CIFAR-10 Triplet train loader and standard test loader created with {num_workers} workers.")
 
     return train_loader, test_loader
-
-# if __name__ == '__main__':
-#     # Example usage
-#     # Pass num_workers here in the example if needed
-#     train_loader, test_loader = get_cifar10_dataloaders(batch_size=32, num_workers=0) # Example with 0 workers for easy debugging
-
-#     # Check a training batch (triplets)
-#     print("\nChecking a training batch (triplets):")
-#     (anchor_imgs, positive_imgs, negative_imgs), anchor_labels = next(iter(train_loader))
-#     print(f"Anchor batch shape: {anchor_imgs.shape}") # Should be [batch_size, 3, 32, 32]
-#     print(f"Positive batch shape: {positive_imgs.shape}") # Should be [batch_size, 3, 32, 32]
-#     print(f"Negative batch shape: {negative_imgs.shape}") # Should be [batch_size, 3, 32, 32]
-#     print(f"Anchor labels shape: {anchor_labels.shape}") # Should be [batch_size]
-#     print(f"Sample Anchor Labels (remapped): {anchor_labels[:5]}")
-
-#     # Check a testing batch (standard)
-#     print("\nChecking a testing batch (standard):")
-#     images, labels = next(iter(test_loader))
-#     print(f"Test batch shape: {images.shape}") # Should be [batch_size, 3, 32, 32]
-#     print(f"Test labels shape: {labels.shape}") # Should be [batch_size]
-#     print(f"Sample Test Labels (remapped): {labels[:5]}")

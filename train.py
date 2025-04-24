@@ -296,25 +296,3 @@ def train_model(
     # MODEL_SAVE_PATH is defined globally based on ENCODER_ARCHITECTURE and NUM_CLASSES
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
     print(f"Model parameters saved to '{MODEL_SAVE_PATH}'")
-
-
-# if __name__ == "__main__":
-#     # 1. Data Loading (moved here from inside the function)
-#     # get_cifar10_dataloaders now returns TripletLoader for train and standard for test
-#     train_loader, test_loader = get_cifar10_dataloaders(
-#         BATCH_SIZE, num_workers=NUM_WORKERS
-#     )
-
-#     # Call the training function with all parameters
-#     train_model(
-#         train_loader=train_loader,
-#         test_loader=test_loader,
-#         encoder_name=ENCODER_ARCHITECTURE,  # Pass the encoder name
-#         embedding_dim=EMBEDDING_DIM,
-#         num_classes=NUM_CLASSES,  # Use the imported NUM_CLASSES
-#         learning_rate=LEARNING_RATE,
-#         num_epochs=NUM_EPOCHS,
-#         triplet_margin=TRIPLET_MARGIN,  # Pass triplet HPs
-#         triplet_weight=TRIPLET_LOSS_WEIGHT,
-#         classification_weight=CLASSIFICATION_LOSS_WEIGHT,
-#     )

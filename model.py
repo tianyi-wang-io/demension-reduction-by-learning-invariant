@@ -70,9 +70,6 @@ class ResNet18Encoder(nn.Module):
     """
     def __init__(self, embedding_dim=64):
         super(ResNet18Encoder, self).__init__()
-        # Load a pre-trained ResNet-18 (we'll replace the head, pre-training isn't strictly necessary
-        # for this task but can sometimes help feature extraction).
-        # We'll train from scratch by default.
         resnet18 = models.resnet18(weights=None) # weights=None for training from scratch
 
         # Adapt the first layer for 32x32 images.
@@ -103,14 +100,6 @@ class ResNet18Encoder(nn.Module):
 
         # Store embedding_dim
         self.embedding_dim = embedding_dim
-
-        # Copy weights from the original resnet for layers we keep
-        # self.conv1.load_state_dict(resnet18.conv1.state_dict()) # Copy weights for conv1 (optional, can train from scratch)
-        # self.bn1.load_state_dict(resnet18.bn1.state_dict())
-        # self.layer1.load_state_dict(resnet18.layer1.state_dict())
-        # self.layer2.load_state_dict(resnet18.layer2.state_dict())
-        # self.layer3.load_state_dict(resnet18.layer3.state_dict())
-        # self.layer4.load_state_dict(resnet18.layer4.state_dict())
 
     def forward(self, x):
         # Forward pass adapted from ResNet-18
