@@ -152,8 +152,6 @@ def get_cifar10_datasets(data_dir='./data'):
     # Transformations for the training set with data augmentation
     # These transforms will be applied by the base dataset *before* triplet formation
     train_transform = transforms.Compose([
-        # transforms.RandomCrop(32, padding=4),
-        # transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         # transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
     ])

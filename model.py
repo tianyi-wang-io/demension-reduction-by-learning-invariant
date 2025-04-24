@@ -105,12 +105,12 @@ class ResNet18Encoder(nn.Module):
         self.embedding_dim = embedding_dim
 
         # Copy weights from the original resnet for layers we keep
-        self.conv1.load_state_dict(resnet18.conv1.state_dict()) # Copy weights for conv1 (optional, can train from scratch)
-        self.bn1.load_state_dict(resnet18.bn1.state_dict())
-        self.layer1.load_state_dict(resnet18.layer1.state_dict())
-        self.layer2.load_state_dict(resnet18.layer2.state_dict())
-        self.layer3.load_state_dict(resnet18.layer3.state_dict())
-        self.layer4.load_state_dict(resnet18.layer4.state_dict())
+        # self.conv1.load_state_dict(resnet18.conv1.state_dict()) # Copy weights for conv1 (optional, can train from scratch)
+        # self.bn1.load_state_dict(resnet18.bn1.state_dict())
+        # self.layer1.load_state_dict(resnet18.layer1.state_dict())
+        # self.layer2.load_state_dict(resnet18.layer2.state_dict())
+        # self.layer3.load_state_dict(resnet18.layer3.state_dict())
+        # self.layer4.load_state_dict(resnet18.layer4.state_dict())
 
     def forward(self, x):
         # Forward pass adapted from ResNet-18

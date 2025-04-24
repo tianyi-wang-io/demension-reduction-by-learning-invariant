@@ -115,15 +115,28 @@ def train_model(
             negative_images = negative_images.to(device)
             anchor_labels = anchor_labels.to(device)
 
-            # --- Removed combining images and splitting ---
+            # Combine images into a single batch for efficiency
+            combined_images = torch.cat(
+                [anchor_images, positive_images, negative_images], dim=0
+            )
 
-            # Forward pass through the model to get embeddings and logits separately
-            anchor_embeddings = model.get_embedding(anchor_images)
-            positive_embeddings = model.get_embedding(positive_images)
-            negative_embeddings = model.get_embedding(negative_images)
+            # Forward pass through the model
+            # Model outputs logits, but we need embeddings for triplet loss
+            combined_logits = model(combined_images)
+            combined_embeddings = model.get_embedding(
+                combined_images
+            )  # Get embeddings separately
 
-            # Get logits for classification loss (only needed for anchor)
-            anchor_logits = model(anchor_images)
+            # Split the combined outputs/embeddings back
+            batch_size = anchor_images.size(0)
+            # Fix: Explicitly provide split sizes as a list
+            split_sizes = [batch_size, batch_size, batch_size]
+            anchor_embeddings, positive_embeddings, negative_embeddings = torch.split(
+                combined_embeddings, split_sizes, dim=0
+            )
+            anchor_logits, positive_logits, negative_logits = torch.split(
+                combined_logits, split_sizes, dim=0
+            )
 
             # Calculate Losses
             # 1. Triplet Loss on Embeddings
@@ -131,7 +144,7 @@ def train_model(
                 anchor_embeddings, positive_embeddings, negative_embeddings
             )
 
-            # 2. Classification Loss on Anchor Logits
+            # 2. Classification Loss on Anchor Logits (or average over all if desired)
             classification_loss = classification_criterion(
                 anchor_logits, anchor_labels
             )  # Use anchor logits/labels

@@ -53,7 +53,7 @@ def load_trained_model(model_path, encoder_name, embedding_dim, num_classes, dev
     print(f"Model loaded successfully from {model_path}")
     return model
 
-def predict_image_class(model, image_tensor, device):
+def predict_image_class(model, image_tensor, device, output_embeding=False):
     """
     Predicts the class of a single image.
 
@@ -81,9 +81,9 @@ def predict_image_class(model, image_tensor, device):
     confidence_score = confidence.item()
 
     # You can also get the embedding if needed
-    # embedding = model.get_embedding(image_tensor)
-    # print(f"Embedding shape: {embedding.shape}")
-
+    embedding = model.get_embedding(image_tensor)
+    if output_embeding:
+        return predicted_class_name, confidence_score, embedding
     return predicted_class_name, confidence_score
 
 # if __name__ == '__main__':
