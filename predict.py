@@ -67,9 +67,11 @@ def predict_image_class(model, image_tensor, device, output_embeding=False):
     # CIFAR-10 class names
     CIFAR10_CLASSES = ['cat', 'dog', 'ship', 'truck']
 
+    image_tensor = image_tensor.unsqueeze(0)
     image_tensor = image_tensor.to(device)
 
     # Perform inference
+    model.eval()
     with torch.no_grad():
         outputs = model(image_tensor) # Get logits
 

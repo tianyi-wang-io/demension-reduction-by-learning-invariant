@@ -4,13 +4,21 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import os
 import numpy as np
+import pandas as pd
+
 # Import tqdm
 from tqdm import tqdm
 
 # Import modules from our project
 # Import get_cifar10_dataloaders, NUM_CLASSES, CIFAR10_CLASSES
 from data_preparation import NUM_CLASSES, CIFAR10_CLASSES
-from model import InvariantMappingModel, build_encoder, ClassifierHead, ResNet18Encoder, CNNEncoder
+from model import (
+    InvariantMappingModel,
+    build_encoder,
+    ClassifierHead,
+    ResNet18Encoder,
+    CNNEncoder,
+)
 
 # Import both loss functions
 from loss import get_loss_function, get_triplet_loss_function
@@ -56,7 +64,8 @@ def train_model(
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     # Include encoder name and num_classes in model save path
     MODEL_SAVE_PATH = os.path.join(
-        OUTPUT_DIR, f"{ENCODER_ARCHITECTURE}_{NUM_CLASSES}cls_{embedding_dim}dim_model.pth"
+        OUTPUT_DIR,
+        f"{encoder_name}_{num_classes}cls_{embedding_dim}dim_{triplet_margin}tm_model.pth",
     )
 
     # Device configuration (moved inside function as provided by user's code)
@@ -68,7 +77,7 @@ def train_model(
     print(f"Using device: {device}")
 
     print(
-        f"LEARNING_RATE: {learning_rate}, \nNUM_EPOCHS: {num_epochs} \nEMBEDDING_DIM: {embedding_dim} \nNUM_CLASSES: {num_classes}"
+        f"learning_rate: {learning_rate}, \nnum_epochs: {num_epochs} \nembedding_dim: {embedding_dim} \nnum_classes: {num_classes}"
     )
     print(f"Encoder Architecture: {encoder_name}")
     print(
@@ -107,7 +116,11 @@ def train_model(
         )
 
         # train_loader yields (anchor_img, positive_img, negative_img), anchor_label
-        for (anchor_images, positive_images, negative_images), anchor_labels in train_loop:
+        for (
+            anchor_images,
+            positive_images,
+            negative_images,
+        ), anchor_labels in train_loop:
 
             # Move data to device
             anchor_images = anchor_images.to(device)
@@ -161,7 +174,7 @@ def train_model(
             optimizer.step()
 
             # Accumulate losses and accuracy metrics
-            batch_size = anchor_images.size(0) # Get current batch size
+            batch_size = anchor_images.size(0)  # Get current batch size
             running_train_loss += (
                 total_loss.item() * batch_size
             )  # Accumulate total loss per sample
@@ -175,16 +188,27 @@ def train_model(
 
             # Update tqdm description
             if train_loop.n > 0:
-                avg_total_loss = running_train_loss / (train_loop.n * batch_size) if batch_size > 0 else 0 # Handle potential empty batch at the very end if drop_last=False
-                avg_clf_loss = running_classification_loss / (train_loop.n * batch_size) if batch_size > 0 else 0
-                avg_trip_loss = running_triplet_loss / (train_loop.n * batch_size) if batch_size > 0 else 0
+                avg_total_loss = (
+                    running_train_loss / (train_loop.n * batch_size)
+                    if batch_size > 0
+                    else 0
+                )  # Handle potential empty batch at the very end if drop_last=False
+                avg_clf_loss = (
+                    running_classification_loss / (train_loop.n * batch_size)
+                    if batch_size > 0
+                    else 0
+                )
+                avg_trip_loss = (
+                    running_triplet_loss / (train_loop.n * batch_size)
+                    if batch_size > 0
+                    else 0
+                )
                 train_loop.set_postfix(
                     total_loss=f"{avg_total_loss:.4f}",
                     clf_loss=f"{avg_clf_loss:.4f}",
                     trip_loss=f"{avg_trip_loss:.4f}",
                     acc=f"{100. * correct_predictions / total_predictions:.2f}%",  # Training accuracy
                 )
-
 
         epoch_train_loss = running_train_loss / len(
             train_loader.dataset
@@ -225,9 +249,12 @@ def train_model(
 
                 # Update tqdm description with current average test loss
                 if test_loop.n > 0:  # Safety check
-                    avg_test_batch_loss = running_test_loss / (test_loop.n * images.size(0)) if images.size(0) > 0 else 0 # Handle potential empty batch
+                    avg_test_batch_loss = (
+                        running_test_loss / (test_loop.n * images.size(0))
+                        if images.size(0) > 0
+                        else 0
+                    )  # Handle potential empty batch
                     test_loop.set_postfix(loss=f"{avg_test_batch_loss:.4f}")
-
 
         epoch_test_loss = running_test_loss / len(test_loader.dataset)
         test_losses.append(epoch_test_loss)
@@ -255,9 +282,7 @@ def train_model(
         train_losses,
         label=f"Train Total Loss (W_trip={triplet_weight}, W_clf={classification_weight})",
     )
-    # Optionally plot individual loss components
-    # plt.plot(np.array(running_classification_loss_history)/len(train_loader.dataset), label="Train Clf Loss (per Anchor)", linestyle='--')
-    # plt.plot(np.array(running_triplet_loss_history)/len(train_loader.dataset), label="Train Triplet Loss (per Anchor)", linestyle=':')
+
     plt.plot(
         test_losses, label="Test Clf Loss"
     )  # Test loss is only classification loss
@@ -268,7 +293,8 @@ def train_model(
     plt.grid(True)
     plt.savefig(
         os.path.join(
-            OUTPUT_DIR, f"{encoder_name}_{num_classes}cls_{embedding_dim}dim_triplet_loss_plot.png"
+            OUTPUT_DIR,
+            f"{encoder_name}_{num_classes}cls_{embedding_dim}dim_{triplet_margin}tm_triplet_loss_plot.png",
         )  # Update filename
     )
     plt.close()
@@ -285,12 +311,25 @@ def train_model(
     plt.grid(True)
     plt.savefig(
         os.path.join(
-            OUTPUT_DIR, f"{encoder_name}_{num_classes}cls_{embedding_dim}dim_triplet_accuracy_plot.png"
+            OUTPUT_DIR,
+            f"{encoder_name}_{num_classes}cls_{embedding_dim}dim_{triplet_margin}tm_triplet_accuracy_plot.png",
         )  # Update filename
     )
     plt.close()
 
     print(f"Plots saved to '{OUTPUT_DIR}' directory.")
+
+    training_csv = pd.DataFrame(
+        {
+            "train_accuracy": train_accuracies,
+            "test_accuracy": test_accuracies,
+            "train_loss": train_losses,
+            "test_loss": test_losses,
+        }
+    )
+    training_csv['model'] = f'{encoder_name}_{num_classes}cls_{embedding_dim}dim_{triplet_margin}'
+    training_csv['epochs'] = [i+1 for i in range(num_epochs)]
+    training_csv.to_csv(MODEL_SAVE_PATH.replace('.pth', '.csv'), index=False)
 
     # 6. Saving the Model Parameters
     # MODEL_SAVE_PATH is defined globally based on ENCODER_ARCHITECTURE and NUM_CLASSES
