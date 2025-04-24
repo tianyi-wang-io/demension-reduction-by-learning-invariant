@@ -9,7 +9,7 @@ class ClassifierHead(nn.Module):
     """
     A simple classifier head that takes the embedding and outputs class scores.
     """
-    def __init__(self, embedding_dim, num_classes=10):
+    def __init__(self, embedding_dim, num_classes=4):
         super(ClassifierHead, self).__init__()
         self.fc1 = nn.Linear(embedding_dim, 128)
         self.relu = nn.ReLU()

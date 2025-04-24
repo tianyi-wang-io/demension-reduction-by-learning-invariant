@@ -4,15 +4,16 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import os
 import numpy as np
-
 # Import tqdm
 from tqdm import tqdm
 
 # Import modules from our project
 # Import get_cifar10_dataloaders, NUM_CLASSES, CIFAR10_CLASSES
 from data_preparation import NUM_CLASSES, CIFAR10_CLASSES
-from model import InvariantMappingModel, build_encoder
-from loss import get_loss_function
+from model import InvariantMappingModel, build_encoder, ClassifierHead, ResNet18Encoder, CNNEncoder
+
+# Import both loss functions
+from loss import get_loss_function, get_triplet_loss_function
 
 
 # --- Hyperparameters ---
@@ -23,23 +24,42 @@ EMBEDDING_DIM = 64  # The dimensionality of the reduced space
 # NUM_CLASSES is imported from data_preparation
 
 # *** Choose your encoder architecture here ***
-# ENCODER_ARCHITECTURE = 'cnn' # or 'resnet18'
+ENCODER_ARCHITECTURE = "cnn"  # or 'resnet18'
+
+# *** Add num_workers hyperparameter ***
+NUM_WORKERS = 4
+
+# *** Hyperparameters for Triplet Loss ***
+TRIPLET_MARGIN = 1.0  # Margin for Triplet Loss
+TRIPLET_LOSS_WEIGHT = 1.0  # Weight for the triplet loss term
+CLASSIFICATION_LOSS_WEIGHT = 0.5  # Weight for the classification loss term
 
 
 def train_model(
     train_loader,
     test_loader,
-    encoder_model,
+    encoder_name,  # Pass encoder_name here
     embedding_dim,
     num_classes,
     learning_rate,
     num_epochs,
+    triplet_margin,
+    triplet_weight,
+    classification_weight,  # Pass loss weights and margin
 ):
     """
-    Handles the training process, evaluation, plotting, and saving.
+    Handles the training process with triplet loss, evaluation, plotting, and saving.
     Adds tqdm progress bars.
     """
-    # Device configuration
+    # --- Output directory ---
+    OUTPUT_DIR = "./output"
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Include encoder name and num_classes in model save path
+    MODEL_SAVE_PATH = os.path.join(
+        OUTPUT_DIR, f"{ENCODER_ARCHITECTURE}_{NUM_CLASSES}cls_{embedding_dim}dim_model.pth"
+    )
+
+    # Device configuration (moved inside function as provided by user's code)
     device = torch.device(
         "cuda"
         if torch.cuda.is_available()
@@ -47,85 +67,127 @@ def train_model(
     )
     print(f"Using device: {device}")
 
-    # --- Output directory ---
-    OUTPUT_DIR = "output"
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    # Include encoder name and num_classes in model save path
-    MODEL_SAVE_PATH = os.path.join(
-        OUTPUT_DIR, f"{encoder_model}_{NUM_CLASSES}cls_{embedding_dim}dim_invariant_mapping_model.pth"
-    )
-
     print(
         f"LEARNING_RATE: {learning_rate}, \nNUM_EPOCHS: {num_epochs} \nEMBEDDING_DIM: {embedding_dim} \nNUM_CLASSES: {num_classes}"
     )
-    print(f"Encoder Architecture: {encoder_model}")
+    print(f"Encoder Architecture: {encoder_name}")
+    print(
+        f"Triplet Margin: {triplet_margin}, Triplet Weight: {triplet_weight}, Classification Weight: {classification_weight}"
+    )
 
     # 2. Model, Loss, and Optimizer
-    encoder = build_encoder(encoder_model, embedding_dim)
+    encoder = build_encoder(encoder_name, embedding_dim)  # Use passed encoder_name
     model = InvariantMappingModel(encoder, num_classes).to(device)
-    criterion = get_loss_function()
+    # Get both loss functions
+    classification_criterion = get_loss_function()
+    triplet_criterion = get_triplet_loss_function(margin=triplet_margin)
+
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
     # Lists to store training history for plotting
-    train_losses = []
-    train_accuracies = []
-    test_losses = []
-    test_accuracies = []
+    train_losses = []  # Total training loss (combined)
+    train_accuracies = []  # Accuracy based on classification head
+    test_losses = []  # Test loss (classification only)
+    test_accuracies = []  # Test accuracy
 
     print("Starting training...")
 
     # 3. Training Loop
     for epoch in range(num_epochs):
         model.train()  # Set model to training mode
-        running_train_loss = 0.0
+        running_train_loss = 0.0  # Sum of total loss (combined)
+        running_classification_loss = 0.0  # Sum of classification loss component
+        running_triplet_loss = 0.0  # Sum of triplet loss component
         correct_predictions = 0
         total_predictions = 0
 
-        # Wrap train_loader with tqdm
+        # Wrap train_loader (which yields triplets) with tqdm
         train_loop = tqdm(
             train_loader, leave=True, desc=f"Epoch {epoch+1}/{num_epochs} [Train]"
         )
 
-        for i, (images, labels) in enumerate(train_loop):
-            images = images.to(device)
-            labels = labels.to(device)
+        # train_loader yields (anchor_img, positive_img, negative_img), anchor_label
+        for (anchor_images, positive_images, negative_images), anchor_labels in train_loop:
 
-            # Forward pass
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            # Move data to device
+            anchor_images = anchor_images.to(device)
+            positive_images = positive_images.to(device)
+            negative_images = negative_images.to(device)
+            anchor_labels = anchor_labels.to(device)
 
-            # Calculate accuracy for the batch
-            _, predicted = torch.max(outputs.data, 1)
-            total_predictions += labels.size(0)
-            correct_predictions += (predicted == labels).sum().item()
+            # --- Removed combining images and splitting ---
+
+            # Forward pass through the model to get embeddings and logits separately
+            anchor_embeddings = model.get_embedding(anchor_images)
+            positive_embeddings = model.get_embedding(positive_images)
+            negative_embeddings = model.get_embedding(negative_images)
+
+            # Get logits for classification loss (only needed for anchor)
+            anchor_logits = model(anchor_images)
+
+            # Calculate Losses
+            # 1. Triplet Loss on Embeddings
+            triplet_loss = triplet_criterion(
+                anchor_embeddings, positive_embeddings, negative_embeddings
+            )
+
+            # 2. Classification Loss on Anchor Logits
+            classification_loss = classification_criterion(
+                anchor_logits, anchor_labels
+            )  # Use anchor logits/labels
+
+            # Combined Loss
+            total_loss = (
+                triplet_weight * triplet_loss
+                + classification_weight * classification_loss
+            )
 
             # Backward and optimize
             optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             optimizer.step()
 
-            running_train_loss += loss.item() * images.size(0)
+            # Accumulate losses and accuracy metrics
+            batch_size = anchor_images.size(0) # Get current batch size
+            running_train_loss += (
+                total_loss.item() * batch_size
+            )  # Accumulate total loss per sample
+            running_classification_loss += classification_loss.item() * batch_size
+            running_triplet_loss += triplet_loss.item() * batch_size
 
-            # Update tqdm description with current average loss per sample
-            # Use train_loop.n (total samples processed) as denominator
-            if train_loop.n > 0:  # Safety check for division by zero
-                avg_batch_loss = running_train_loss / train_loop.n
-                train_loop.set_postfix(loss=avg_batch_loss)
+            # Calculate accuracy for the anchor images in the batch (for training accuracy metric)
+            _, predicted = torch.max(anchor_logits.data, 1)
+            total_predictions += anchor_labels.size(0)  # Use anchor batch size
+            correct_predictions += (predicted == anchor_labels).sum().item()
 
-        epoch_train_loss = running_train_loss / len(train_loader.dataset)
+            # Update tqdm description
+            if train_loop.n > 0:
+                avg_total_loss = running_train_loss / (train_loop.n * batch_size) if batch_size > 0 else 0 # Handle potential empty batch at the very end if drop_last=False
+                avg_clf_loss = running_classification_loss / (train_loop.n * batch_size) if batch_size > 0 else 0
+                avg_trip_loss = running_triplet_loss / (train_loop.n * batch_size) if batch_size > 0 else 0
+                train_loop.set_postfix(
+                    total_loss=f"{avg_total_loss:.4f}",
+                    clf_loss=f"{avg_clf_loss:.4f}",
+                    trip_loss=f"{avg_trip_loss:.4f}",
+                    acc=f"{100. * correct_predictions / total_predictions:.2f}%",  # Training accuracy
+                )
+
+
+        epoch_train_loss = running_train_loss / len(
+            train_loader.dataset
+        )  # Note: len(train_loader.dataset) is # of ANCHORS
         train_losses.append(epoch_train_loss)
 
-        epoch_train_accuracy = 100 * correct_predictions / total_predictions
+        epoch_train_accuracy = 100.0 * correct_predictions / total_predictions
         train_accuracies.append(epoch_train_accuracy)
 
-        # 4. Evaluation Loop
+        # 4. Evaluation Loop (Standard Classification Evaluation)
         model.eval()  # Set model to evaluation mode
-        running_test_loss = 0.0
+        running_test_loss = 0.0  # Classification loss for test set
         correct_predictions = 0
         total_predictions = 0
 
-        # Wrap test_loader with tqdm
-        # tqdm(dataloader) iterates over batches, .n tracks samples
+        # Wrap test_loader (which yields standard batches) with tqdm
         test_loop = tqdm(
             test_loader, leave=True, desc=f"Epoch {epoch+1}/{num_epochs} [Test ]"
         )
@@ -135,8 +197,11 @@ def train_model(
                 images = images.to(device)
                 labels = labels.to(device)
 
-                outputs = model(images)
-                loss = criterion(outputs, labels)
+                # Forward pass (standard classification)
+                outputs = model(images)  # Model returns logits
+
+                # Calculate Classification loss for test set
+                loss = classification_criterion(outputs, labels)
 
                 running_test_loss += loss.item() * images.size(0)
 
@@ -145,13 +210,11 @@ def train_model(
                 total_predictions += labels.size(0)
                 correct_predictions += (predicted == labels).sum().item()
 
-                # Update tqdm description with current average test loss per sample
-                # Use test_loop.n (total samples processed) as denominator
-                if test_loop.n > 0:  # Safety check for division by zero
-                    avg_test_batch_loss = running_test_loss / test_loop.n
-                    test_loop.set_postfix(
-                        loss=avg_test_batch_loss
-                    )  # Accuracy will be calculated per epoch
+                # Update tqdm description with current average test loss
+                if test_loop.n > 0:  # Safety check
+                    avg_test_batch_loss = running_test_loss / (test_loop.n * images.size(0)) if images.size(0) > 0 else 0 # Handle potential empty batch
+                    test_loop.set_postfix(loss=f"{avg_test_batch_loss:.4f}")
+
 
         epoch_test_loss = running_test_loss / len(test_loader.dataset)
         test_losses.append(epoch_test_loss)
@@ -160,44 +223,85 @@ def train_model(
         test_accuracies.append(epoch_test_accuracy)
 
         # Print final epoch summary below the progress bars
+        # Use accumulated losses for printing epoch summary
         print(
-            f"Epoch [{epoch+1}/{num_epochs}] Summary: "  # Correct variable names here
-            f"Train Loss: {epoch_train_loss:.4f}, "
-            f"Test Loss: {epoch_test_loss:.4f}, "
-            f"Test Accuracy: {epoch_test_accuracy:.2f}%"
+            f"\nEpoch [{epoch+1}/{num_epochs}] Summary: "
+            f"Total Train Loss: {epoch_train_loss:.4f}, "
+            f"Clf Train Loss: {running_classification_loss / len(train_loader.dataset):.4f}, "  # Avg clf loss per anchor
+            f"Trip Train Loss: {running_triplet_loss / len(train_loader.dataset):.4f}, "  # Avg trip loss per anchor
+            f"Train Acc: {epoch_train_accuracy:.2f}%, "
+            f"Test Loss: {epoch_test_loss:.4f}, "  # Test loss is only classification loss
+            f"Test Acc: {epoch_test_accuracy:.2f}% \n\n"
         )
 
     print("Training finished.")
 
     # 5. Plotting
-    plt.figure(figsize=(10, 5))
-    plt.plot(test_losses, label="Test Loss", color="green")
-    plt.plot(train_losses, label="Train Loss", color="orange")
+    plt.figure(figsize=(12, 6))  # Slightly larger figure
+    plt.plot(
+        train_losses,
+        label=f"Train Total Loss (W_trip={triplet_weight}, W_clf={classification_weight})",
+    )
+    # Optionally plot individual loss components
+    # plt.plot(np.array(running_classification_loss_history)/len(train_loader.dataset), label="Train Clf Loss (per Anchor)", linestyle='--')
+    # plt.plot(np.array(running_triplet_loss_history)/len(train_loader.dataset), label="Train Triplet Loss (per Anchor)", linestyle=':')
+    plt.plot(
+        test_losses, label="Test Clf Loss"
+    )  # Test loss is only classification loss
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title(f"{encoder_model.upper()} Training and Test Loss ({NUM_CLASSES} Classes)")
+    plt.title(f"{encoder_name.upper()} Training and Test Loss ({num_classes} Classes)")
     plt.legend()
     plt.grid(True)
     plt.savefig(
-        os.path.join(OUTPUT_DIR, f"{encoder_model}_{NUM_CLASSES}cls_loss_plot.png")
+        os.path.join(
+            OUTPUT_DIR, f"{encoder_name}_{num_classes}cls_{embedding_dim}dim_triplet_loss_plot.png"
+        )  # Update filename
     )
     plt.close()
 
-    plt.figure(figsize=(10, 5))
+    plt.figure(figsize=(12, 6))  # Slightly larger figure
     plt.plot(test_accuracies, label="Test Accuracy", color="green")
     plt.plot(train_accuracies, label="Train Accuracy", color="orange")
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy (%)")
-    plt.title(f"{encoder_model.upper()} Training and Test Accuracy ({NUM_CLASSES} Classes)")
+    plt.title(
+        f"{encoder_name.upper()} Training and Test Accuracy ({num_classes} Classes)"
+    )
     plt.legend()
     plt.grid(True)
     plt.savefig(
-        os.path.join(OUTPUT_DIR, f"{encoder_model}_{NUM_CLASSES}cls_accuracy_plot.png")
+        os.path.join(
+            OUTPUT_DIR, f"{encoder_name}_{num_classes}cls_{embedding_dim}dim_triplet_accuracy_plot.png"
+        )  # Update filename
     )
     plt.close()
 
     print(f"Plots saved to '{OUTPUT_DIR}' directory.")
 
     # 6. Saving the Model Parameters
+    # MODEL_SAVE_PATH is defined globally based on ENCODER_ARCHITECTURE and NUM_CLASSES
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
     print(f"Model parameters saved to '{MODEL_SAVE_PATH}'")
+
+
+# if __name__ == "__main__":
+#     # 1. Data Loading (moved here from inside the function)
+#     # get_cifar10_dataloaders now returns TripletLoader for train and standard for test
+#     train_loader, test_loader = get_cifar10_dataloaders(
+#         BATCH_SIZE, num_workers=NUM_WORKERS
+#     )
+
+#     # Call the training function with all parameters
+#     train_model(
+#         train_loader=train_loader,
+#         test_loader=test_loader,
+#         encoder_name=ENCODER_ARCHITECTURE,  # Pass the encoder name
+#         embedding_dim=EMBEDDING_DIM,
+#         num_classes=NUM_CLASSES,  # Use the imported NUM_CLASSES
+#         learning_rate=LEARNING_RATE,
+#         num_epochs=NUM_EPOCHS,
+#         triplet_margin=TRIPLET_MARGIN,  # Pass triplet HPs
+#         triplet_weight=TRIPLET_LOSS_WEIGHT,
+#         classification_weight=CLASSIFICATION_LOSS_WEIGHT,
+#     )

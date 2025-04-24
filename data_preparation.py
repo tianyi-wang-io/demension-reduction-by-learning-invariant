@@ -2,7 +2,9 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 import os
-import numpy as np # Need numpy for data filtering
+import numpy as np
+from collections import defaultdict
+import random
 
 # CIFAR-10 statistics for normalization
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
@@ -21,8 +23,8 @@ NEW_CLASS_MAPPING = {
 CIFAR10_CLASSES = ['cat', 'dog', 'ship', 'truck']
 NUM_CLASSES = len(CIFAR10_CLASSES) # The new number of classes
 
-print(f"Using only classes: {CIFAR10_CLASSES}")
-print(f"New number of classes: {NUM_CLASSES}")
+# print(f"Using only classes: {CIFAR10_CLASSES}")
+# print(f"New number of classes: {NUM_CLASSES}")
 
 
 def filter_and_remap_dataset(dataset):
@@ -48,28 +50,107 @@ def filter_and_remap_dataset(dataset):
     dataset.targets = new_targets
 
     print(f"Dataset filtered. New number of samples: {len(dataset)}")
-    # Update classes attribute if needed by DataLoader/Dataset (CIFAR10 already has it)
-    # dataset.classes = CIFAR10_CLASSES # CIFAR10 uses the original class names, we rely on the remapped targets
+    # Note: dataset.classes still holds original names, but targets are remapped
+    # We rely on the remapped targets (0-3) and the global CIFAR10_CLASSES list for lookup
 
     return dataset
 
+class TripletCIFAR10(torch.utils.data.Dataset):
+    """
+    Custom Dataset to generate Anchor-Positive-Negative triplets
+    from the filtered CIFAR-10 dataset.
+    """
+    def __init__(self, base_dataset):
+        self.base_dataset = base_dataset
+        self.data = self.base_dataset.data # Access data and targets from base dataset
+        self.targets = self.base_dataset.targets
+        self.transform = self.base_dataset.transform # Keep base dataset transforms
 
-def get_cifar10_dataset(data_dir='./data'):
+        # Create index mapping: class label -> list of indices for that class
+        self.class_indices = defaultdict(list)
+        for i, target in enumerate(self.targets):
+            self.class_indices[target].append(i)
+
+        self.labels = sorted(list(self.class_indices.keys())) # Get the list of unique labels (0, 1, 2, 3)
+        print(f"Triplet Dataset created with {len(self)} samples (based on base dataset size).")
+        print(f"Classes found in dataset: {self.labels}")
+
+
+    def __len__(self):
+        # We can iterate based on the number of samples in the base dataset.
+        # Each sample can serve as an anchor.
+        return len(self.base_dataset)
+
+    def __getitem__(self, index):
+        """
+        Generates one triplet: (anchor, positive, negative).
+        """
+        # 1. Get Anchor
+        anchor_img, anchor_label = self.base_dataset[index] # base_dataset applies transforms
+
+        # 2. Get Positive (same class as anchor)
+        # Choose a random index from the same class, different from anchor's index
+        same_class_indices = self.class_indices[anchor_label]
+        positive_index = index # Start with anchor index
+
+        # Loop until a different index is found (handle case where class has only one sample)
+        # While loop can be slow if class is very small.
+        # Better: sample from indices excluding current, if possible.
+        if len(same_class_indices) > 1:
+            positive_index = random.choice([i for i in same_class_indices if i != index])
+        # else: positive_index remains the same as anchor, triplet might not be effective,
+        # but this case is rare with typical batch sizes. Or handle more robustly.
+        # For simplicity here, we'll just allow anchor==positive if class size is 1.
+        # A more robust approach samples from a list of indices excluding 'index'.
+        # Let's do the robust sampling:
+        available_positive_indices = [i for i in same_class_indices if i != index]
+        if not available_positive_indices:
+             # Handle case where only one sample exists for this class (rare in CIFAR subset)
+             # For simplicity, reuse anchor as positive, but triplet won't provide signal
+             positive_index = index
+        else:
+             positive_index = random.choice(available_positive_indices)
+
+        positive_img, _ = self.base_dataset[positive_index] # base_dataset applies transforms
+
+        # 3. Get Negative (different class from anchor)
+        # Choose a random label that is NOT the anchor label
+        negative_label_candidate = random.choice(self.labels)
+        while negative_label_candidate == anchor_label:
+             negative_label_candidate = random.choice(self.labels)
+
+        # Choose a random index from the negative class
+        negative_index = random.choice(self.class_indices[negative_label_candidate])
+        negative_img, _ = self.base_dataset[negative_index] # base_dataset applies transforms
+
+        # Return the triplet images and the anchor's remapped label
+        return (anchor_img, positive_img, negative_img), anchor_label
+
+
+# Modify the data loader function
+# It will return TripletCIFAR10 for training and standard CIFAR10 for testing
+# The transforms (including augmentation for training) are handled by the base dataset
+# used within TripletCIFAR10.
+def get_cifar10_datasets(data_dir='./data'):
     """
     Prepares, filters, remaps, and returns data loaders for
-    a subset of CIFAR-10 training and testing.
+    a subset of CIFAR-10 training (as triplets) and testing (standard).
 
     Args:
         batch_size (int): The batch size for the data loaders.
         data_dir (str): The directory to download/load the dataset from.
+        num_workers (int): Number of subprocesses to use for data loading.
 
     Returns:
         tuple: A tuple containing (train_loader, test_loader).
+               train_loader yields batches of (anchor_img, positive_img, negative_img), anchor_label.
+               test_loader yields batches of img, label.
     """
     # Ensure data directory exists
     os.makedirs(data_dir, exist_ok=True)
 
     # Transformations for the training set with data augmentation
+    # These transforms will be applied by the base dataset *before* triplet formation
     train_transform = transforms.Compose([
         # transforms.RandomCrop(32, padding=4),
         # transforms.RandomHorizontalFlip(),
@@ -83,36 +164,60 @@ def get_cifar10_dataset(data_dir='./data'):
         # transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
     ])
 
-    # Load the training and test datasets
-    train_dataset = torchvision.datasets.CIFAR10(
+    # Load the base training and test datasets (these apply the transforms)
+    base_train_dataset = torchvision.datasets.CIFAR10(
         root=data_dir, train=True, download=True, transform=train_transform
     )
-    test_dataset = torchvision.datasets.CIFAR10(
+    base_test_dataset = torchvision.datasets.CIFAR10(
         root=data_dir, train=False, download=True, transform=test_transform
     )
 
     # --- Filter and Remap Datasets ---
-    print("Filtering and remapping training dataset...")
-    train_dataset = filter_and_remap_dataset(train_dataset)
+    print("Filtering and remapping base training dataset...")
+    base_train_dataset = filter_and_remap_dataset(base_train_dataset)
 
-    print("Filtering and remapping testing dataset...")
-    test_dataset = filter_and_remap_dataset(test_dataset)
+    print("Filtering and remapping base testing dataset...")
+    base_test_dataset = filter_and_remap_dataset(base_test_dataset)
     # --- End Filtering ---
-    print(f"Using only classes: {CIFAR10_CLASSES}")
-    print(f"New number of classes: {NUM_CLASSES}")
 
-    return train_dataset, test_dataset
+    # Create the Triplet Dataset for training from the filtered base training dataset
+    triplet_train_dataset = TripletCIFAR10(base_train_dataset)
+
+    return triplet_train_dataset, base_test_dataset
 
 
-def get_dataloader(train_dataset, test_dataset, batch_size=128, num_worders=4):
+def get_dataloader(triplet_train_dataset, base_test_dataset, batch_size=128, num_workers=4):
     # Create data loaders
+    # train_loader uses the Triplet Dataset
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_worders
+        triplet_train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True
     )
+    # test_loader uses the standard filtered base test dataset
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_worders
+        base_test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True
     )
 
-    print(f"Filtered CIFAR-10 dataset loaders created. train_dataset:{len(train_dataset)} test_dataset: {len(test_dataset)}.")
+    print(f"Filtered CIFAR-10 Triplet train loader and standard test loader created with {num_workers} workers.")
 
     return train_loader, test_loader
+
+# if __name__ == '__main__':
+#     # Example usage
+#     # Pass num_workers here in the example if needed
+#     train_loader, test_loader = get_cifar10_dataloaders(batch_size=32, num_workers=0) # Example with 0 workers for easy debugging
+
+#     # Check a training batch (triplets)
+#     print("\nChecking a training batch (triplets):")
+#     (anchor_imgs, positive_imgs, negative_imgs), anchor_labels = next(iter(train_loader))
+#     print(f"Anchor batch shape: {anchor_imgs.shape}") # Should be [batch_size, 3, 32, 32]
+#     print(f"Positive batch shape: {positive_imgs.shape}") # Should be [batch_size, 3, 32, 32]
+#     print(f"Negative batch shape: {negative_imgs.shape}") # Should be [batch_size, 3, 32, 32]
+#     print(f"Anchor labels shape: {anchor_labels.shape}") # Should be [batch_size]
+#     print(f"Sample Anchor Labels (remapped): {anchor_labels[:5]}")
+
+#     # Check a testing batch (standard)
+#     print("\nChecking a testing batch (standard):")
+#     images, labels = next(iter(test_loader))
+#     print(f"Test batch shape: {images.shape}") # Should be [batch_size, 3, 32, 32]
+#     print(f"Test labels shape: {labels.shape}") # Should be [batch_size]
+#     print(f"Sample Test Labels (remapped): {labels[:5]}")
